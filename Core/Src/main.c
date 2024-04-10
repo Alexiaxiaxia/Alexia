@@ -19,6 +19,7 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 
+
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "lsm6dsl.h"
@@ -27,7 +28,8 @@
 #include "network.h"
 #include "network_data.h"
 #include <stdio.h>
-
+#include <stdlib.h>
+#include <string.h>
 #include "lps22hb.h"
 #include "lps22hb_reg.h"
 
@@ -36,9 +38,11 @@
 
 #include "hts221.h"
 #include "hts221_reg.h"
+#include "stm32l4xx_hal_tim.h"
+#include "stm32l4xx_hal.h"
+
 #define MAX_PRESSURE_POINTS 10  // 数组最大长度，用于存储压力数据
 #define MAX_STRING_LENGTH 1024  // 字符串最大长度，用于打印消息
-#define DATA_BUFFER_SIZE 100  // 定义数据缓冲区大小
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -91,6 +95,8 @@ PCD_HandleTypeDef hpcd_USB_OTG_FS;
 LSM6DSL_Object_t MotionSensor;
 //volatile uint32_t dataRdyIntReceived;
 
+TIM_HandleTypeDef htim2;  // 定时器句柄
+
 ai_handle network;
 float aiInData[AI_NETWORK_IN_1_SIZE];
 float aiOutData[AI_NETWORK_OUT_1_SIZE];
@@ -101,18 +107,25 @@ const char* activities[AI_NETWORK_OUT_1_SIZE] = {
 ai_buffer * ai_input;
 ai_buffer * ai_output;
 
-float pressureBuffer[DATA_BUFFER_SIZE];
-LSM6DSL_Axes_t angularVelocityBuffer[DATA_BUFFER_SIZE]; // 假设角速度数据类型为 LSM6DSL_Axes_t
-float temperatureBuffer[DATA_BUFFER_SIZE];
-float humidityBuffer[DATA_BUFFER_SIZE];
-LIS3MDL_Axes_t magneticBuffer[DATA_BUFFER_SIZE];
+float pressureBuffer[40];
+LSM6DSL_Axes_t angularVelocityBuffer[40]; // 假设角速度数据类型为 LSM6DSL_Axes_t
+LIS3MDL_Axes_t magneticBuffer[80];
 uint32_t dataCount = 0;
+uint32_t angularCount = 0;
+uint32_t pressureCount = 0;
+uint32_t magneticCount = 0;
+
+float humidity = 0.0f;
+float temperature = 0.0f;
 
 
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 
+void Timer_Init(void);
+void Timer_Start(void);
+uint32_t Timer_Stop(void);
 
 static void PRESSURE_Init(void);
 void printAllPressureValues();//存压力数据
@@ -129,6 +142,7 @@ static void MX_USART1_UART_Init(void);
 static void MX_USART3_UART_Init(void);
 static void MX_USB_OTG_FS_PCD_Init(void);
 static void MX_CRC_Init(void);
+void printArrays(void);
 /* USER CODE BEGIN PFP */
 static void MEMS_Init(void);
 static void AI_Init(void);
@@ -179,6 +193,8 @@ int main(void)
   MX_USART3_UART_Init();
   MX_USB_OTG_FS_PCD_Init();
   MX_CRC_Init();
+  Timer_Init();
+
   /* USER CODE BEGIN 2 */
   dataRdyIntReceived = 0;
   MEMS_Init();
@@ -187,127 +203,114 @@ int main(void)
   HTS221_Init_Custom();
   LIS3MDL_Init_Custom();
 
+  // 获取系统核心时钟频率
+  uint32_t sysclk_freq = HAL_RCC_GetHCLKFreq();
+
+  // 定时器预分频器
+  uint32_t prescaler = htim2.Init.Prescaler + 1; // 实际的预分频值需要加1
+
+  // 计算定时器频率
+  uint32_t tim_freq = sysclk_freq / prescaler;
+
+  printf("TIM2 Frequency: %lu Hz\n", tim_freq);
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   uint32_t write_index = 0;
+  float hts221Frequence = 0.0;
+  HTS221_HUM_GetOutputDataRate(&HTS221Sensor, &hts221Frequence);
+  printf("f of HTS221_HUM: %.2f", hts221Frequence);
+
+  float hts221TEMPFrequence = 0.0;
+  HTS221_TEMP_GetOutputDataRate(&HTS221Sensor, &hts221TEMPFrequence);
+  printf("f of HTS221_TEMP: %.2f", hts221TEMPFrequence);
+
+  float is3mdFrequence = 0.0;
+  LIS3MDL_MAG_GetOutputDataRate(&LIS3MDLSensor, &is3mdFrequence);
+  printf("f of LIS3MDL: %.2f", is3mdFrequence);
+  float lp22hbFrequence = 0.0;
+  LPS22HB_PRESS_GetOutputDataRate(&PressureSensor, &lp22hbFrequence);
+  printf("f of LPS22HB: %.2f", lp22hbFrequence);
+  float lsm6dsl_acc_frequence = 0.0;
+  LSM6DSL_ACC_GetOutputDataRate(&MotionSensor, &lsm6dsl_acc_frequence);
+  printf("f of  LSM6DS_ACC: %.2f", lsm6dsl_acc_frequence);
+
+  float lsm6dsl_gyro_frequence = 0.0;
+  LSM6DSL_GYRO_GetOutputDataRate(&MotionSensor, &lsm6dsl_gyro_frequence);
+  printf("f of  LSM6DS_gyro: %.2f", lsm6dsl_gyro_frequence);
+  int slot = 0;
   while (1)
-
-
   {
 
-////      float pressure; // 假设的变量，用于存储从传感器读取的压力值
-////
-////      // 尝试读取压力传感器的值
-////      if (LPS22HB_PRESS_GetPressure(&PressureSensor, &pressure) == LPS22HB_OK) {
-////          // 检查数组是否已满
-////          if (currentPressureIndex < MAX_PRESSURE_POINTS) {
-////              // 如果未满，存储压力值到数组中
-////              pressureArray[currentPressureIndex++] = pressure;
-////          } else {
-////              // 如果数组已满，使用辅助函数打印所有压力值
-////              printAllPressureValues();
-////          }
-////      }
-//
-//
-//      if (LSM6DSL_GYRO_GetAxes(&MotionSensor, &angular_velocity) == LSM6DSL_OK) {
-//        // 打印角速度值
-//        printf("Angular Velocity: X: %.2f, Y: %.2f, Z: %.2f\r\n",
-//               angular_velocity.x, angular_velocity.y, angular_velocity.z);
-//      }
-//
-//	  if (LIS3MDL_MAG_GetAxes(&LIS3MDLSensor, &magnetic_axes) == LIS3MDL_OK) {
-//	    // 打印磁力计的X、Y、Z轴值
-//	    printf("Magnetometer Axes: X: %ld, Y: %ld, Z: %ld\r\n", magnetic_axes.x, magnetic_axes.y, magnetic_axes.z);
-//	  }
-//
-//	  if (HTS221_HUM_GetHumidity(&HTS221Sensor, &humidity) == HTS221_OK) {
-//	    // 打印湿度值
-//	    printf("Humidity: %.2f%%\r\n", humidity);
-//	  }
-//
-//	  // 读取温度
-//	  if (HTS221_TEMP_GetTemperature(&HTS221Sensor, &temperature) == HTS221_OK) {
-//	    // 打印温度值
-//	    printf("Temperature: %.2f°C\r\n", temperature);
-//	  }
-//
-//
-//
-//	  //		打印压力
-//	  if (LPS22HB_PRESS_GetPressure(&PressureSensor, &pressure) == LPS22HB_OK)
-//	  {
-//	    printf("Pressure [hPa]: %.2f\r\n", pressure);
-//	  }
-
-
-
-
-
-      float humidity = 0.0f;
-      float temperature = 0.0f;
       LIS3MDL_Axes_t magnetic_axes;
+      Timer_Start();
+//      HTS221_HUM_GetHumidity(&HTS221Sensor, &humidity);
+//      uint32_t hts_elapsedTime = Timer_Stop();
+//      float humidity = 0.0f;
+//      float temperature = 0.0f;
+//      printf("poll execution clock: %d \n", hts_elapsedTime);
+      if(slot == 3){
+    	  HTS221_HUM_GetHumidity(&HTS221Sensor, &humidity);
+    	  HTS221_TEMP_GetTemperature(&HTS221Sensor, &temperature);
+      }
+      int slotD10 = slot % 10;
+      if(slotD10 == 0){
+    	  LSM6DSL_Axes_t acc_axes;
+    	  LSM6DSL_ACC_GetAxes(&MotionSensor, &acc_axes);
+    //	  printf("% 5d, % 5d, % 5d\r\n",  (int) acc_axes.x, (int) acc_axes.y, (int) acc_axes.z);
 
-      if (HTS221_HUM_GetHumidity(&HTS221Sensor, &humidity) == HTS221_OK &&
-          HTS221_TEMP_GetTemperature(&HTS221Sensor, &temperature) == HTS221_OK &&
-          LIS3MDL_MAG_GetAxes(&LIS3MDLSensor, &magnetic_axes) == LIS3MDL_OK &&
-          LPS22HB_PRESS_GetPressure(&PressureSensor, &pressure) == LPS22HB_OK &&
-		  LSM6DSL_GYRO_GetAxes(&MotionSensor, &angular_velocity) == LSM6DSL_OK) {
+          /* Normalize data to [-1; 1] and accumulate into input buffer */
+          /* Note: window overlapping can be managed here */
+          aiInData[write_index + 0] = (float) acc_axes.x / 4000.0f;
+          aiInData[write_index + 1] = (float) acc_axes.y / 4000.0f;
+          aiInData[write_index + 2] = (float) acc_axes.z / 4000.0f;
+          write_index += 3;
+          // 3 * 25
+          write_index %= 75;
+      }
+      if(slotD10 == 1){
+    	  LSM6DSL_GYRO_GetAxes(&MotionSensor, &angular_velocity);
+    	  angularVelocityBuffer[angularCount ++] = angular_velocity;
+    	  angularCount %= 40;
+      }
+      if(slotD10 == 2){
+    	  LPS22HB_PRESS_GetPressure(&PressureSensor, &pressure);
+    	  pressureBuffer[pressureCount ++] = pressure;
+    	  pressureCount %= 40;
+      }
+      int slotD5 = slot % 5;
+      if(slotD5 == 4 && slot!=394){
+    	  LIS3MDL_MAG_GetAxes(&LIS3MDLSensor, &magnetic_axes);
+    	  magneticBuffer[magneticCount++] = magnetic_axes;
+    	  magneticCount %= 80;
+      }
+      if(slot == 393){
+    	  // 执行推理
+          printf("Running inference\r\n");
+          AI_Run(aiInData, aiOutData);
 
-          if (dataCount < DATA_BUFFER_SIZE) {
-              temperatureBuffer[dataCount] = temperature;
-              humidityBuffer[dataCount] = humidity;
-              magneticBuffer[dataCount] = magnetic_axes;
-              pressureBuffer[dataCount] = pressure;
-              angularVelocityBuffer[dataCount] = angular_velocity;
-              dataCount++;
+          /* Output results */
+          for (uint32_t i = 0; i < AI_NETWORK_OUT_1_SIZE; i++) {
+            printf("%8.6f ", aiOutData[i]);
           }
+          uint32_t class = argmax(aiOutData, AI_NETWORK_OUT_1_SIZE);
+          printf(": %d - %s\r\n", (int) class, activities[class]);
       }
-
-      // 打印所有累积的数据
-      if (dataCount >= DATA_BUFFER_SIZE) {
-          for (uint32_t i = 0; i < DATA_BUFFER_SIZE; i++) {
-              printf("Data %ld: Temp: %.2f°C, Hum: %.2f%%, Mag: X: %ld, Y: %ld, Z: %ld, Pressure: %.2f hPa, Angular Velocity: X: %ld, Y: %ld, Z: %ld\r\n",
-                     i, temperatureBuffer[i], humidityBuffer[i],
-                     magneticBuffer[i].x, magneticBuffer[i].y, magneticBuffer[i].z,
-                     pressureBuffer[i],
-                     angularVelocityBuffer[i].x, angularVelocityBuffer[i].y, angularVelocityBuffer[i].z);
-          }
-          dataCount = 0;  // 重置计数器
+      if(slot == 383){
+    	  // output data
+    	  printArrays();
       }
+      slot ++;
+      slot %= 400;
+      uint32_t clockNum = Timer_Stop();
+//      printf("clockNum %.d  \r\n",clockNum);
 
+      double costTime = ((double)clockNum) / tim_freq ;
+      int roundedUp = (int)ceil(costTime);
 
-	  HAL_Delay(100); /* Wait 100ms */
-
-	  if (dataRdyIntReceived != 0) {
-	  dataRdyIntReceived = 0;
-	  LSM6DSL_Axes_t acc_axes;
-	  LSM6DSL_ACC_GetAxes(&MotionSensor, &acc_axes);
-//	  printf("% 5d, % 5d, % 5d\r\n",  (int) acc_axes.x, (int) acc_axes.y, (int) acc_axes.z);
-
-      /* Normalize data to [-1; 1] and accumulate into input buffer */
-      /* Note: window overlapping can be managed here */
-      aiInData[write_index + 0] = (float) acc_axes.x / 4000.0f;
-      aiInData[write_index + 1] = (float) acc_axes.y / 4000.0f;
-      aiInData[write_index + 2] = (float) acc_axes.z / 4000.0f;
-      write_index += 3;
-
-      if (write_index == AI_NETWORK_IN_1_SIZE) {
-        write_index = 0;
-
-        printf("Running inference\r\n");
-        AI_Run(aiInData, aiOutData);
-
-        /* Output results */
-        for (uint32_t i = 0; i < AI_NETWORK_OUT_1_SIZE; i++) {
-          printf("%8.6f ", aiOutData[i]);
-        }
-        uint32_t class = argmax(aiOutData, AI_NETWORK_OUT_1_SIZE);
-        printf(": %d - %s\r\n", (int) class, activities[class]);
-      }
-    }
+//      printf("executing time %.2e ms \r\n", costTime * 1000);
+      HAL_Delay(costTime >= 1.5? 0 : (int)(2.5 -costTime));
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -315,6 +318,167 @@ int main(void)
   /* USER CODE END 3 */
 }
 
+//void printArrays(float* anglarSpeed, int size1, float* pressureArr, int size2, float* magneticArr, int size3, float* speedArr, int size4) {
+void printArrays() {
+	LSM6DSL_Axes_t* anglarSpeed = angularVelocityBuffer;
+    int bufferSize = 1024;
+	int size1 = 40;
+    char* result = malloc(bufferSize); // 初始分配
+    if (!result) {
+        printf("Memory allocation failed\n");
+        return;
+    }
+    result[0] = '\0'; // 初始化为空字符串
+
+    int usedLength = 0;
+    int tem_written =  snprintf(result + usedLength, bufferSize - usedLength, "\r\n angular speed data:");
+    if (usedLength >= bufferSize - 1) { // 检查是否需要扩展缓冲区
+        bufferSize *= 2;
+        result = realloc(result, bufferSize);
+        if (!result) {
+            printf("Memory reallocation failed\n");
+            return;
+        }
+    }
+    usedLength += tem_written; // 更新已使用的长度
+    for (int i = 0; i < size1; ++i) {
+        int written = snprintf(result + usedLength, bufferSize - usedLength, "x:%.2f y:%.2f z:%.2f,", anglarSpeed[i].x,  anglarSpeed[i].y,  anglarSpeed[i].z);
+        usedLength += written; // 更新已使用的长度
+        if (usedLength >= bufferSize - 1) { // 检查是否需要扩展缓冲区
+            bufferSize *= 2;
+            result = realloc(result, bufferSize);
+            if (!result) {
+                printf("Memory reallocation failed\n");
+                return;
+            }
+        }
+    }
+    float* pressureArr = pressureBuffer;
+    int size2 = 40;
+    tem_written =  snprintf(result + usedLength, bufferSize - usedLength, "\r\n pressure data:");
+    usedLength += tem_written; // 更新已使用的长度
+    // 遍历第二个数组
+    if (usedLength >= bufferSize - 1) { // 检查是否需要扩展缓冲区
+        bufferSize *= 2;
+        result = realloc(result, bufferSize);
+        if (!result) {
+            printf("Memory reallocation failed\n");
+            return;
+        }
+    }
+    for (int i = 0; i < size2; ++i) {
+        int written = snprintf(result + usedLength, bufferSize - usedLength, "%.2f, ", pressureArr[i]);
+        usedLength += written; // 更新已使用的长度
+        if (usedLength >= bufferSize - 1) { // 检查是否需要扩展缓冲区
+            bufferSize *= 2;
+            result = realloc(result, bufferSize);
+            if (!result) {
+                printf("Memory reallocation failed\n");
+                return;
+            }
+        }
+    }
+    tem_written =  snprintf(result + usedLength, bufferSize - usedLength, "\r\n magnetic data:");
+    usedLength += tem_written; // 更新已使用的长度
+    if (usedLength >= bufferSize - 1) { // 检查是否需要扩展缓冲区
+        bufferSize *= 2;
+        result = realloc(result, bufferSize);
+        if (!result) {
+            printf("Memory reallocation failed\n");
+            return;
+        }
+    }
+    LIS3MDL_Axes_t* magneticArr = magneticBuffer;
+    int size3 = 80;
+    // 遍历第三个数组
+    for (int i = 0; i < size3; ++i) {
+        int written = snprintf(result + usedLength, bufferSize - usedLength, "x:%.2f y:%.2f z:%.2f, ", magneticArr[i].x, magneticArr[i].y, magneticArr[i].z);
+        usedLength += written; // 更新已使用的长度
+        if (usedLength >= bufferSize - 1) { // 检查是否需要扩展缓冲区
+            bufferSize *= 2;
+            result = realloc(result, bufferSize);
+            if (!result) {
+                printf("Memory reallocation failed\n");
+                return;
+            }
+        }
+    }
+    tem_written =  snprintf(result + usedLength, bufferSize - usedLength, "\r\n speedArr data:");
+    usedLength += tem_written; // 更新已使用的长度
+    if (usedLength >= bufferSize - 1) { // 检查是否需要扩展缓冲区
+        bufferSize *= 2;
+        result = realloc(result, bufferSize);
+        if (!result) {
+            printf("Memory reallocation failed\n");
+            return;
+        }
+    }
+    // 遍历第四个数组
+    float* speedArr = aiInData;
+    int size4 = AI_NETWORK_IN_1_SIZE;
+    for (int i = 0; i < size4; i+=3) {
+        int written = snprintf(result + usedLength, bufferSize - usedLength, "x:%.2f y:%.2f z:%.2f ", speedArr[i], speedArr[i + 1], speedArr[i + 2]);
+        usedLength += written; // 更新已使用的长度
+        if (usedLength >= bufferSize - 1) { // 检查是否需要扩展缓冲区
+            bufferSize *= 2;
+            result = realloc(result, bufferSize);
+            if (!result) {
+                printf("Memory reallocation failed\n");
+                return;
+            }
+        }
+    }
+    tem_written =  snprintf(result + usedLength, bufferSize - usedLength, "\r\n  humidity:%.2f", humidity);
+    usedLength += tem_written; // 更新已使用的长度
+    if (usedLength >= bufferSize - 1) { // 检查是否需要扩展缓冲区
+        bufferSize *= 2;
+        result = realloc(result, bufferSize);
+        if (!result) {
+            printf("Memory reallocation failed\n");
+            return;
+        }
+    }
+    tem_written =  snprintf(result + usedLength, bufferSize - usedLength, "\r\n  temperature:%.2f", temperature);
+    usedLength += tem_written; // 更新已使用的长度
+    if (usedLength >= bufferSize - 1) { // 检查是否需要扩展缓冲区
+        bufferSize *= 2;
+        result = realloc(result, bufferSize);
+        if (!result) {
+            printf("Memory reallocation failed\n");
+            return;
+        }
+    }
+
+    printf("%s\n", result); // 打印结果
+    free(result); // 释放内存
+}
+
+void Timer_Init(void) {
+  __HAL_RCC_TIM2_CLK_ENABLE();  // 使能TIM2时钟
+
+  htim2.Instance = TIM2;  // 指定定时器实例
+  htim2.Init.Prescaler = (uint32_t)((SystemCoreClock / 2) / 1000000) - 1;  // 预分频器，假设时钟频率为80MHz，我们想要定时器时钟为1MHz
+  htim2.Init.CounterMode = TIM_COUNTERMODE_UP;  // 向上计数模式
+  htim2.Init.Period = 0xFFFFFFFF;  // 设置自动重装载寄存器周期的最大值
+  htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;  // 不分频
+  htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;  // 禁用自动重载预装载
+  if (HAL_TIM_Base_Init(&htim2) != HAL_OK) {  // 初始化基本定时器
+    Error_Handler();
+  }
+}
+/* 启动定时器 */
+void Timer_Start(void) {
+  __HAL_TIM_CLEAR_FLAG(&htim2, TIM_FLAG_UPDATE);  // 清除更新标志
+  HAL_TIM_Base_Start(&htim2);  // 启动定时器
+}
+
+/* 停止定时器并获取当前计时 */
+uint32_t Timer_Stop(void) {
+    HAL_TIM_Base_Stop(&htim2);  // 停止定时器
+    uint32_t elapsedTime = __HAL_TIM_GET_COUNTER(&htim2);  // 获取当前计数值
+    __HAL_TIM_SET_COUNTER(&htim2, 0);  // 重置计数器为0
+    return elapsedTime;  // 返回计时
+}
 /**
   * @brief System Clock Configuration
   * @retval None
@@ -884,7 +1048,7 @@ static void MEMS_Init(void)
   LSM6DSL_Init(&MotionSensor);
 
   /* Configure the LSM6DSL accelerometer (ODR, scale and interrupt) */
-  LSM6DSL_ACC_SetOutputDataRate(&MotionSensor, 26.0f); /* 26 Hz */
+  LSM6DSL_ACC_SetOutputDataRate(&MotionSensor, 25.0f); /* 26 Hz */
   LSM6DSL_ACC_SetFullScale(&MotionSensor, 4);          /* [-4000mg; +4000mg] */
   LSM6DSL_ACC_Set_INT1_DRDY(&MotionSensor, ENABLE);    /* Enable DRDY */
   LSM6DSL_ACC_GetAxesRaw(&MotionSensor, &axes);        /* Clear DRDY */
@@ -1063,10 +1227,9 @@ void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
   /* User can add his own implementation to report the HAL error return state */
-  while(1) {
 	HAL_GPIO_TogglePin(LED2_GPIO_Port, LED2_Pin);
 	HAL_Delay(50); /* wait 50 ms */
-  }
+
   /* USER CODE END Error_Handler_Debug */
 }
 
