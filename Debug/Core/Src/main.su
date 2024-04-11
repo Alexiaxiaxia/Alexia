@@ -20,6 +20,6 @@
 ../Core/Src/main.c:1097:13:HTS221_Init_Custom	72	static
 ../Core/Src/main.c:1139:13:LIS3MDL_Init_Custom	48	static
 ../Core/Src/main.c:1175:6:printAllPressureValues	1128	static
-../Core/Src/main.c:1193:6:HAL_GPIO_EXTI_Callback	16	static
-../Core/Src/main.c:1215:5:_write	24	static
-../Core/Src/main.c:1226:6:Error_Handler	8	static
+../Core/Src/main.c:1223:6:HAL_GPIO_EXTI_Callback	24	static,ignoring_inline_asm
+../Core/Src/main.c:1246:5:_write	24	static
+../Core/Src/main.c:1257:6:Error_Handler	8	static

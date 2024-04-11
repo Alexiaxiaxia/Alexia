@@ -107,8 +107,8 @@ const char* activities[AI_NETWORK_OUT_1_SIZE] = {
 ai_buffer * ai_input;
 ai_buffer * ai_output;
 
-float pressureBuffer[40];
-LSM6DSL_Axes_t angularVelocityBuffer[40]; // 假设角速度数据类型为 LSM6DSL_Axes_t
+float pressureBuffer[25];
+LSM6DSL_Axes_t angularVelocityBuffer[25]; // 假设角速度数据类型为 LSM6DSL_Axes_t
 LIS3MDL_Axes_t magneticBuffer[80];
 uint32_t dataCount = 0;
 uint32_t angularCount = 0;
@@ -272,12 +272,12 @@ int main(void)
       if(slotD10 == 1){
     	  LSM6DSL_GYRO_GetAxes(&MotionSensor, &angular_velocity);
     	  angularVelocityBuffer[angularCount ++] = angular_velocity;
-    	  angularCount %= 40;
+    	  angularCount %= 25;
       }
       if(slotD10 == 2){
     	  LPS22HB_PRESS_GetPressure(&PressureSensor, &pressure);
     	  pressureBuffer[pressureCount ++] = pressure;
-    	  pressureCount %= 40;
+    	  pressureCount %= 25;
       }
       int slotD5 = slot % 5;
       if(slotD5 == 4 && slot!=394){
@@ -322,7 +322,7 @@ int main(void)
 void printArrays() {
 	LSM6DSL_Axes_t* anglarSpeed = angularVelocityBuffer;
     int bufferSize = 1024;
-	int size1 = 40;
+	int size1 = 25;
     char* result = malloc(bufferSize); // 初始分配
     if (!result) {
         printf("Memory allocation failed\n");
@@ -354,7 +354,7 @@ void printArrays() {
         }
     }
     float* pressureArr = pressureBuffer;
-    int size2 = 40;
+    int size2 = 25;
     tem_written =  snprintf(result + usedLength, bufferSize - usedLength, "\r\n pressure data:");
     usedLength += tem_written; // 更新已使用的长度
     // 遍历第二个数组
@@ -1100,7 +1100,7 @@ static void HTS221_Init_Custom(void)
     HTS221_Capabilities_t cap;
 
     /* Configure the HTS221 driver with the I2C bus handlers */
-    io_ctx.BusType = HTS221_I2C_BUS; /* Assuming I2C bus */
+    io_ctx.BusType = HTS221_I2C_BUS;
     io_ctx.Address = HTS221_I2C_ADDRESS;
     io_ctx.Init = BSP_I2C2_Init;
     io_ctx.DeInit = BSP_I2C2_DeInit;
@@ -1144,7 +1144,7 @@ static void LIS3MDL_Init_Custom(void)
 
     // 初始化接口函数
     io_ctx.BusType = LIS3MDL_I2C_BUS;
-    io_ctx.Address = LIS3MDL_I2C_ADD_H; // 确保这是您的设备I2C地址
+    io_ctx.Address = LIS3MDL_I2C_ADD_H;
     io_ctx.Init = BSP_I2C2_Init;
     io_ctx.DeInit = BSP_I2C2_DeInit;
     io_ctx.ReadReg = BSP_I2C2_ReadReg;
@@ -1190,18 +1190,18 @@ void printAllPressureValues() {
 }
 
 
-void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
-{
-  switch(GPIO_Pin) {
-  case LPS22HB_INT_DRDY_EXTI0_Pin:
-    dataRdyIntReceived++;
-    break;
-  case 2048:
-	    dataRdyIntReceived++;
-  default:
-    break;
-  }
-}
+//void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+//{
+//  switch(GPIO_Pin) {
+//  case LPS22HB_INT_DRDY_EXTI0_Pin:
+//    dataRdyIntReceived++;
+//    break;
+//  case BUTTON_EXTI13_Pin:
+//
+//  default:
+//    break;
+//  }
+//}
 
 
 
@@ -1210,7 +1210,38 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 //  if (GPIO_Pin == GPIO_PIN_11) {
 //    dataRdyIntReceived++;
 //  }
+//
+//	if(GPIO_Pin == BUTTON_EXTI13_Pin)
+//	{
+//		HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_14);
+//		printf("\t Button is pressed. Execute 5ms interrupt\n");
+////	    HAL_Delay(5);
+//	    printf("\t interrupt ends \n");
+//	}
 //}
+
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+  if (GPIO_Pin == GPIO_PIN_11)
+  {
+    dataRdyIntReceived++;
+  }
+
+  if (GPIO_Pin == BUTTON_EXTI13_Pin)
+  {
+    HAL_GPIO_TogglePin(GPIOB, GPIO_PIN_14);
+    printf("\t Button is pressed. Execute 10ms delay\n");
+
+    uint32_t delay_count = 100000; // 80,000,000Hz * 5ms /4 = 100000个时钟周期
+
+    while (delay_count--)
+    {
+      __NOP(); // 空操作,消耗一个时钟周期
+    }
+
+    printf("\t Delay ends\n");
+  }
+}
 
 int _write(int fd, char * ptr, int len)
 {
